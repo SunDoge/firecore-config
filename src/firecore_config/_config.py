@@ -1,11 +1,24 @@
 from pydantic import BaseModel
 import argparse
-from argparse import ArgumentParser
+from argparse import ArgumentParser, HelpFormatter
 import typing
 import logging
 from typing import Dict, Any, Type, TypeVar, Optional
 
 logger = logging.getLogger(__name__)
+
+
+NoneType = type(None)
+
+
+class TypedHelpFormatter(HelpFormatter):
+    def _get_help_string(self, action: argparse.Action) -> str | None:
+        help_str = super()._get_help_string(action)
+        if action.type is not None:
+            help_str += f" (type: {action.type.__name__})"
+        if action.default is not None:
+            help_str += f" (default: {action.default})"
+        return help_str
 
 
 def add_arguments(
@@ -14,9 +27,10 @@ def add_arguments(
     name_prefix: str = "-",
     dest_prefix: str = "",
 ):
+    group = parser.add_argument_group(title=f"{model.__class__.__qualname__}")
     for key, field in model.model_fields.items():
         name = name_prefix + "-" + key.replace("_", "-")
-        dest = dest_prefix + "." + key
+        dest = (dest_prefix + "." + key) if dest_prefix else key
 
         logger.debug(f"name={name}, dest={dest}, key={key}, field={field}")
 
@@ -36,26 +50,21 @@ def add_arguments(
 
             if field.annotation is bool:
                 # add --flag and --no-flag
-                add_bool_argument(parser, name, dest, field.default)
+                add_bool_argument(group, name, dest, field.default)
                 continue
 
-            add_typed_argument(parser, name, dest, field.default, field.annotation)
+            add_typed_argument(group, name, dest, field.default, field.annotation)
             continue
 
         if tp is typing.Union:
-            print("=" * 100)
             inner = typing.get_args(field.annotation)
-            if len(inner) == 2 and type(None) in inner:
+            if len(inner) == 2 and NoneType in inner:  # typing.Optional
                 tp2 = get_not_none(inner)
                 if tp2 is bool:
-                    add_bool_argument(parser, name, dest, field.default)
+                    add_bool_argument(group, name, dest, field.default)
                 else:
-                    add_typed_argument(parser, name, dest, field.default, tp2)
+                    add_typed_argument(group, name, dest, field.default, tp2)
                 continue
-
-        # import ipdb
-
-        # ipdb.set_trace()
 
 
 def add_bool_argument(parser: ArgumentParser, name: str, dest: str, default: bool):
@@ -64,6 +73,7 @@ def add_bool_argument(parser: ArgumentParser, name: str, dest: str, default: boo
         action=argparse.BooleanOptionalAction,
         default=default,
         dest=dest,
+        help=f"(default: bool = {default})",
     )
 
 
@@ -82,23 +92,26 @@ def add_typed_argument(
         dest=dest,
         default=default,
         type=type,
+        help=f"(default: {type.__name__} = {default})",
     )
 
 
 def get_not_none(xs):
-    return [x for x in xs if x is not None][0]
+    rest = [x for x in xs if x is not NoneType]
+    logger.debug(f"rest: {rest}")
+    return rest[0]
 
 
 def assign_arguments(options: Dict[str, Any], parsed: Dict[str, Any]):
     for key, value in parsed.items():
-        parts = key.split(".")[1:]
+        parts = key.split(".")
         dict_ref = options
         for part in parts[:-1]:
             dict_ref = dict_ref[part]
         dict_ref[parts[-1]] = value
 
 
-class Options(BaseModel):
+class Hparams(BaseModel):
     optim: typing.Optional[str] = "sgd"
     bool_value: bool = True
 
@@ -119,16 +132,17 @@ def _main():
     logging.basicConfig(level=logging.DEBUG)
 
     parser = argparse.ArgumentParser()
-    add_arguments(parser, Options())
+    parser.add_argument("--dv", default=1)
+    add_arguments(parser, Hparams())
     ns = parser.parse_args()
     ic(ns)
     ic(ns.__dict__)
 
-    options = Options()
+    options = Hparams()
     ic(options)
     options_dict = options.model_dump()
     assign_arguments(options_dict, ns.__dict__)
-    options2 = Options.model_validate(options_dict)
+    options2 = Hparams.model_validate(options_dict)
     ic(options2)
 
 
