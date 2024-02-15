@@ -1,24 +1,26 @@
 from pydantic import BaseModel
 import argparse
-from argparse import ArgumentParser, HelpFormatter
+from argparse import ArgumentParser
 import typing
 import logging
-from typing import Dict, Any, Type, TypeVar, Optional
+from typing import Dict, Any, Type, TypeVar, Optional, Union
 
 logger = logging.getLogger(__name__)
 
 
-NoneType = type(None)
+_NoneType = type(None)
 
 
-class TypedHelpFormatter(HelpFormatter):
-    def _get_help_string(self, action: argparse.Action) -> str | None:
-        help_str = super()._get_help_string(action)
-        if action.type is not None:
-            help_str += f" (type: {action.type.__name__})"
-        if action.default is not None:
-            help_str += f" (default: {action.default})"
-        return help_str
+def str_to_bool(x: Union[str, bool]) -> bool:
+    if isinstance(x, bool):
+        return x
+    x_lower = x.lower()
+    if x_lower in ["1", "yes", "true", "t", "y"]:
+        return True
+    elif x_lower in ["0", "no", "false", "f", "n"]:
+        return False
+    else:
+        raise argparse.ArgumentTypeError("Boolean value expected.")
 
 
 def add_arguments(
@@ -48,23 +50,30 @@ def add_arguments(
                 )
                 continue
 
-            if field.annotation is bool:
-                # add --flag and --no-flag
-                add_bool_argument(group, name, dest, field.default)
-                continue
+            # if field.annotation is bool:
+            #     # add --flag and --no-flag
+            #     # add_bool_argument(group, name, dest, field.default)
+            #     continue
 
             add_typed_argument(group, name, dest, field.default, field.annotation)
             continue
 
         if tp is typing.Union:
             inner = typing.get_args(field.annotation)
-            if len(inner) == 2 and NoneType in inner:  # typing.Optional
+            if len(inner) == 2 and _NoneType in inner:  # typing.Optional
                 tp2 = get_not_none(inner)
                 if tp2 is bool:
                     add_bool_argument(group, name, dest, field.default)
                 else:
                     add_typed_argument(group, name, dest, field.default, tp2)
                 continue
+
+        if tp is list:
+            inner = typing.get_args(field.annotation)
+            assert len(inner) == 1
+            tp2 = inner[0]
+            add_typed_list_argument(group, name, dest, field.default, tp2)
+            continue
 
 
 def add_bool_argument(parser: ArgumentParser, name: str, dest: str, default: bool):
@@ -91,13 +100,30 @@ def add_typed_argument(
         name,
         dest=dest,
         default=default,
-        type=type,
+        type=str_to_bool if type is bool else type,
         help=f"(default: {type.__name__} = {default})",
     )
 
 
+def add_typed_list_argument(
+    parser: ArgumentParser,
+    name: str,
+    dest: str,
+    default: Optional[T],
+    type: Type[T],
+):
+    parser.add_argument(
+        name,
+        dest=dest,
+        default=default,
+        type=str_to_bool if type is bool else type,
+        help=f"(default: List[{type.__name__}] = {default})",
+        nargs=argparse.ZERO_OR_MORE,
+    )
+
+
 def get_not_none(xs):
-    rest = [x for x in xs if x is not NoneType]
+    rest = [x for x in xs if x is not _NoneType]
     logger.debug(f"rest: {rest}")
     return rest[0]
 
@@ -117,6 +143,7 @@ class Hparams(BaseModel):
 
     class Train(BaseModel):
         batch_size: int = 4
+        file_list: typing.List[bool] = []
 
     train: Train = Train()
 
